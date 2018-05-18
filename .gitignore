@@ -1,0 +1,16 @@
+.*
+!/.gitignore
+__pycache__/
+*.egg-info/
+wip/
+*build/
+*dist/
+MANIFEST
+*.bat
+update.sh
+changelog
+TODO
+*.so
+*.pyd
+*.xcf
+standalone_build.py
