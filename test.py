@@ -3,19 +3,29 @@ import sys
 import inspect
 import unittest
 
-from parse import to_source, compare_ast, max_depth
+from xylem import to_source, compare_ast, max_depth
+
 
 def src_to_tree(*src, mode='exec'):
     return [ast.parse(s, mode=mode) for s in src]
 
+
 def src_to_src(*src, mode='exec'):
     return [to_source(ast.parse(s, mode=mode)) for s in src]
+
 
 def src_to_src_to_tree(*src, mode='exec'):
     return [ast.parse(to_source(ast.parse(s, mode=mode)), mode=mode) for s in src]
 
+
 def compare_trees(trees1, trees2):
     return all(compare_ast(t1, t2) for t1, t2 in zip(trees1, trees2))
+
+
+def dual_trees(*src, mode='exec'):  # Gets both src-to-trees and round-tripped trees
+    trees = src_to_tree(*src, mode=mode)
+    rtt = src_to_src_to_tree(*src, mode=mode)
+    return trees, rtt
 
 
 # Test compare_ast
@@ -30,47 +40,44 @@ class TestAtoms(unittest.TestCase):
     # Test various numbers
     def test_Num(self):
         src = ['1', '1+1j', '0xff']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test various strings
     def test_Str(self):
         src = ["'a'", "'a %s'%b", "'\\n'"]
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test byte strings
     def test_Bytes(self):
         src = ["b'a'", "b'\\x00 \\n'"]
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test the True, False, None, and Ellipsis constants
     def test_NamedConstant(self):
         src = ['True', 'False', 'None', '...']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test Name access, and Starred access
     def test_Var(self):
         src = ['a', '*a']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test lists, tuples, sets, and dictionaries
     def test_Iterable(self):
         src = ['[a, [b, c]]', '(a, (b, c))', '{a, {b, c}}', '{a: b, **c}']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    # Test assignment, annotated assignment, and augmented assignment
+    def test_Assignment(self):
+        src = ['a = b', 'a = b = c', 'a: int = 0', 'a += b']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_FString(self):  # TODO: Skip before 3.6
+        src = ["f'sin({a}) is {sin(a):.3}'", "f'{name!r}'", "f'{func_call(3)}'", "f'{2+3}'"]
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
 
-# Test various miscellaneous expressions, like that produced by mode=eval(), and if expressions
+# Test various miscellaneous expressions, like that produced by mode=eval()
 class TestExpressions(unittest.TestCase):
     # Test container expressions, which contain operators
     def test_Expr(self):
@@ -97,9 +104,7 @@ class TestUnaryOps(unittest.TestCase):
     # Test that unary operations are round-tripped correctly when left of power operations
     def test_priority(self):
         src = ['-1**2', '(-1)**2']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
     # Test that a unary operator on the right of a power operator binds more tightly
     def test_binding(self):
@@ -117,9 +122,9 @@ class TestBinaryOps(unittest.TestCase):
         result = src_to_src(*src)
         self.assertEqual(src, result)
 
-    # Test to ensure left-associative operations like division and modulo behave properly
+    # Test to ensure left-associative operations like division, modulo, and bit shifts are preserved
     def test_special_ops(self):
-        src = ['a-(b-c)', 'a-b-c', 'a//(b/c)', 'a//b/c', 'a/(b%c)', 'a/b%c', 'a%(b/c)', 's%b/c']
+        src = ['a-(b-c)', 'a-b-c', 'a//(b/c)', 'a//b/c', 'a/(b%c)', 'a/b%c', 'a%(b/c)', 's%b/c', 'a>>(b<<c)', 'a<<b<<c']
         trees = src_to_tree(*src)
         rtt = src_to_src_to_tree(*src)
         self.assertTrue(compare_trees(trees, rtt))
@@ -129,21 +134,16 @@ class TestBinaryOps(unittest.TestCase):
 class TestBooleanOps(unittest.TestCase):
     # Test priority with other operators
     def test_priority(self):
-        src = ['not a and b', 'not (a and b)+c', '(not (a and b))+c',
-               'a and b or c', 'a and (b or c)']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        src = ['not a and b', 'not (a and b)+c', '(not (a and b))+c', 'a and b or c', 'a and (b or c)']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
 
 # Test comparison expressions
 class TestComparison(unittest.TestCase):
     # Test the priority relative to other operators, as well as other comparisons
     def test_priority(self):
-        src = ['a>b+c', '(a>b)+c', 'a>b>c', '(a>b)>c', '(a is  b) > c']
-        trees = src_to_tree(*src)
-        rtt = src_to_src_to_tree(*src)
-        self.assertTrue(compare_trees(trees, rtt))
+        src = ['a>b+c', '(a>b)+c', 'a>b>c', '(a>b)>c', '(a is  b) > c', 'not a > b']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
 
 # Test various forms of subscription, such as attribute access and slicing
@@ -156,7 +156,7 @@ class TestSubscripting(unittest.TestCase):
 
     # Test indexing & slicing
     def test_slicing(self):
-        src = ['a[b]', 'a[b:]', 'a[:b]', 'a[::b]', 'a[b::c]', 'a[b:c]', 'a[:b:c]', 'a[b:c:d]']
+        src = ['a[b]', 'a[:]', 'a[b:]', 'a[:b]', 'a[::b]', 'a[b::c]', 'a[b:c]', 'a[:b:c]', 'a[b:c:d]']
         for s in src:
             result = src_to_src(s)[0]
             self.assertEqual(s, result)
@@ -211,11 +211,83 @@ class TestFunctions(unittest.TestCase):
 
     def test_call(self):
         src = ['f()', 'f(a, b)', 'f(a, *b)', 'f(a, b=c)', 'f(a, b=c, *d, **e)']
-        for s in src:
-            tree = src_to_tree(s)
-            rtt = src_to_src_to_tree(s)
-            self.assertTrue(compare_ast(tree, rtt))
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_definition(self):
+        src = ['def a():\n    a', 'def a(a: "annotation", b=1, c=2, *d, e, f=3, **g) -> "annotation":\n    a',
+               '@dec1\n@dec2\ndef a(b=c):\n    a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_lambda(self):
+        src = ['lambda: None', 'lambda: a+b', 'lambda a, b: c']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_classes(self):
+        src = ['class a:\n    a', 'class a(b):\n    a', 'class a(b, c, metaclass=meta):\n    a',
+               '@dec1\n@dec2\nclass a(b):\n    a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+
+class TestExceptions(unittest.TestCase):
+    def test_raise(self):
+        src = ['raise', 'raise a', 'raise a from b']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_assert(self):
+        src = ['assert a', 'assert a > b', 'assert a, "message"']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_Try(self):
+        src = ['try:\n    a\nexcept:\n    a=b', 'try:\n    a=b\nexcept a:\n    a=b\nelse:\n    a=b\nfinally:\n    a=b',
+               'try:\n    a\nexcept a as b:\n    a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+
+class TestSimpleStatements(unittest.TestCase):
+    def test_delete(self):
+        src = ['del a', 'del a, b']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_pass(self):
+        self.assertTrue(compare_trees(*dual_trees('pass')))
+
+    def test_imports(self):
+        src = ['import a', 'import a, b', 'import a as b, c', 'from a import b', 'from . import a',
+               'from a import a, b', 'from a import b as c, d']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_words(self):  # Test various reserved words
+        src = ['return', 'return a', 'yield a', 'yield from [a]', 'global a, b', 'nonlocal a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+
+class TestControlFlow(unittest.TestCase):
+    def test_If(self):
+        src = ['if a:\n    b=c', 'if a:\n    b=c\nelse:\n    c=d', 'if a:\n    b=c\nelif b:\n    c=d\nelse:\n    d=e']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_For(self):
+        src = ['for i in a:\n    b=i', 'for i in a:\n    b=i\nelse:\n    b=c', 'for i, j in a:\n    pass']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_While(self):
+        src = ['while True:\n    pass', 'while True:\n    pass\nelse:\n    pass']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_BreakContinue(self):
+        src = ['for i in a:\n    break', 'for i in a:\n    continue']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+    def test_With(self):
+        src = ['with a:\n    a', 'with a, b:\n    a', 'with a, b as c:\n    a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
+
+
+class TestAsync(unittest.TestCase):  # TODO: Skip this before asyncio existed
+    def test_async(self):
+        src = ['async def a():\n    await a\n    async for i in a:\n        a\n    async with a:\n        a']
+        self.assertTrue(compare_trees(*dual_trees(*src)))
 
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(verbosity=3)
