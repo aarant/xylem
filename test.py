@@ -190,7 +190,8 @@ class TestComprehensions(unittest.TestCase):
             self.assertEqual(s, result)
 
     def test_DictComp(self):
-        src = ['{a:a**2 for a in b}', '{c:c**2 for a in b for c in a}', '{d:d**2 for a in b if a>c for d in a if d<e}']
+        src = ['{a:a**2 for a in b}', '{c:c**2 for a in b for c in a}', '{d:d**2 for a in b if a>c for d in a if d<e}',
+               '{**a, **b}']
         for s in src:
             result = src_to_src(s)[0]
             self.assertEqual(s, result)
@@ -263,7 +264,8 @@ class TestSimpleStatements(unittest.TestCase):
 
 class TestControlFlow(unittest.TestCase):
     def test_If(self):
-        src = ['if a:\n    b=c', 'if a:\n    b=c\nelse:\n    c=d', 'if a:\n    b=c\nelif b:\n    c=d\nelse:\n    d=e']
+        src = ['if a:\n    b=c', 'if a:\n    b=c\nelse:\n    c=d', 'if a:\n    b=c\nelif b:\n    c=d\nelse:\n    d=e',
+               'if a:\n    if b:\n        c']
         self.assertTrue(compare_trees(*dual_trees(*src)))
 
     def test_For(self):

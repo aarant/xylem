@@ -9,7 +9,7 @@ from xylem import __version__, url
 with open('README.rst', 'r') as f:
     long_description = f.read()
 
-setup(name='pynat',
+setup(name='xylem',
       version=__version__,
       description='Convert Python Abstract Syntax Trees to readable source code',
       long_description=long_description,

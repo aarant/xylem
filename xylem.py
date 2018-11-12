@@ -29,7 +29,7 @@ Copyright (C) 2018 Ariel Antonitis. Licensed under the MIT License.
 import ast
 
 
-__version__ = '0.9.0'
+__version__ = '0.9.1'
 url = 'https://github.com/arantonitis/xylem'
 
 
@@ -73,25 +73,21 @@ def _src_FormattedValue(node, raw=False):
 
 
 def _src_List(node):
-    return '[' + ', '.join(map(to_source, node.elts)) + ']'
+    return '[' + ', '.join(to_source(e) for e in node.elts) + ']'
 
 
 def _src_Tuple(node):
-    return '(' + ', '.join(map(to_source, node.elts)) + ')'
+    return '(' + ', '.join(to_source(e) for e in node.elts) + ')'
 
 
 def _src_Set(node):
-    return '{' + ', '.join(map(to_source, node.elts)) + '}'
+    return '{' + ', '.join(to_source(e) for e in node.elts) + '}'
 
 
 def _src_Dict(node):
-    pairs = []
-    for key, value in zip(map(to_source, node.keys), map(to_source, node.values)):
-        if key is None:
-            pairs.append('**' + value)
-        else:
-            pairs.append(key + ':' + value)
-    return '{' + ', '.join(pairs) + '}'
+    # Create a generator consisting of all key=value and **value pairs in the node, then join them
+    return '{' + ', '.join('**' + value if key is None else key + ':' + value
+                           for key, value in zip(map(to_source, node.keys), map(to_source, node.values))) + '}'
 
 
 def _src_Ellipsis(node):
@@ -116,7 +112,7 @@ priority = {ast.Pow: 13, ast.UAdd: 12, ast.USub: 12, ast.Invert: 12, ast.Mult: 1
             ast.BitXor: 7, ast.BitOr: 6, ast.In: 5, ast.NotIn: 5, ast.Is: 5, ast.IsNot: 5, ast.Lt: 5, ast.LtE: 5,
             ast.Gt: 5, ast.GtE: 5, ast.NotEq: 5, ast.Eq: 5, ast.Compare: 5, ast.Not: 4, ast.And: 3, ast.Or: 2, None: -1}
 
-
+# Mapping from AST operators to the string representing that operator
 operator_map = {ast.UAdd: '+', ast.USub: '-', ast.Not: 'not ', ast.Invert: '~', ast.Add: '+', ast.Sub: '-',
                 ast.Mult: '*', ast.Div: '/', ast.FloorDiv: '//', ast.Mod: '%', ast.Pow: '**', ast.LShift: '<<',
                 ast.RShift: '>>', ast.BitOr: '|', ast.BitXor: '^', ast.BitAnd: '&', ast.MatMult: '@', ast.And: ' and ',
@@ -133,7 +129,7 @@ def _src_UnaryOp(node, parent_op=None, descend=0):
     operand = to_source(node.operand, op)
     if parent_op is None:
         parens = False
-    elif op is not ast.Not and parent_op == ast.Pow and descend == 1:
+    elif op is not ast.Not and parent_op == ast.Pow and descend == 1:  # Parens not needed on the right side of 2**-1
         parens = False
     elif priority[parent_op] > priority[op]:
         parens = True
@@ -302,18 +298,12 @@ def _src_comprehension(node):
 
 def _src_Assign(node):
     targets, value = map(to_source, node.targets), to_source(node.value)
-    l = []
-    for target in targets:
-        l.append(target)
-        l.append('=')
-    l.append(value)
-    return ' '.join(l)
+    return ' = '.join(targets) + ' = ' + value
 
 
 def _src_AnnAssign(node):
     target, annotation, value = to_source(node.target), to_source(node.annotation), to_source(node.value)
-    simple = True if node.simple == 1 else False
-    l = [target + ':'] if simple else ['(' + target + '):']
+    l = [target + ':'] if node.simple == 1 else ['(' + target + '):']
     l.append(annotation)
     if value is not None:
         l.extend(['=', value])
@@ -322,8 +312,7 @@ def _src_AnnAssign(node):
 
 def _src_AugAssign(node):
     target, value = to_source(node.target), to_source(node.value)
-    op = operator_map[node.op.__class__]
-    return ' '.join([target, op+'=', value])
+    return ' '.join([target, operator_map[node.op.__class__]+'=', value])
 
 
 def _src_Print(node):  # TODO Python 2 only
@@ -349,8 +338,7 @@ def _src_Assert(node):
 
 
 def _src_Delete(node):
-    targets = map(to_source, node.targets)
-    return 'del ' + ', '.join(targets)
+    return 'del ' + ', '.join(to_source(target) for target in node.targets)
 
 
 def _src_Pass(node):
@@ -358,8 +346,7 @@ def _src_Pass(node):
 
 
 def _src_Import(node):
-    names = map(to_source, node.names)
-    return 'import ' + ', '.join(names)
+    return 'import ' + ', '.join(to_source(name) for name in node.names)
 
 
 def _src_ImportFrom(node):
@@ -369,30 +356,22 @@ def _src_ImportFrom(node):
 
 
 def _src_alias(node):
-    if node.asname is None:
-        return node.name
-    else:
-        return node.name + ' as ' + node.asname
+    return node.name if node.asname is None else node.name + ' as ' + node.asname
 
 
 def _src_If(node):
-    test = to_source(node.test)
-    test = 'if ' + test + ':'
-    body_lines = []
-    for body_node in node.body:
-        body_lines.extend(to_source(body_node).split('\n'))
-    body = list(map(lambda x: ' ' * 4 + x, body_lines))
+    test = 'if ' + to_source(node.test) + ':'
+    body = list(indent(line_export(node.body)))
     if node.orelse:
-        orelse = node.orelse
-        if len(orelse) == 1 and isinstance(orelse[0], ast.If):
-            orelse = orelse[0]
+        if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+            orelse = node.orelse[0]
             else_lines = to_source(orelse).split('\n')
             else_lines[0] = 'el' + else_lines[0]
             orelse = else_lines
             return '\n'.join([test] + body + orelse)
         else:
             else_lines = []
-            for else_node in orelse:
+            for else_node in node.orelse:
                 else_lines.extend(to_source(else_node).split('\n'))
             orelse = list(map(lambda x: ' '*4 + x, else_lines))
             return '\n'.join([test] + body + ['else:'] + orelse)
