@@ -11,10 +11,13 @@ def src_to_tree(*src, mode='exec'):
 
 
 def src_to_src(*src, mode='exec'):
-    return [to_source(ast.parse(s, mode=mode)) for s in src]
+    p = [to_source(ast.parse(s, mode=mode)) for s in src]
+    #print(p)
+    return p
 
 
 def src_to_src_to_tree(*src, mode='exec'):
+    #p = src_to_src(*src)
     return [ast.parse(to_source(ast.parse(s, mode=mode)), mode=mode) for s in src]
 
 

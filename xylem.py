@@ -20,7 +20,7 @@
 # SOFTWARE.
 #
 # xylem.py
-""" Xylem v0.9.0
+""" Xylem v0.10.0
 
 Convert Python Abstract Syntax Trees (ASTs) to source code.
 
@@ -29,59 +29,47 @@ Copyright (C) 2018 Ariel Antonitis. Licensed under the MIT License.
 import ast
 
 
-__version__ = '0.9.1'
+__version__ = '0.10.0'
 url = 'https://github.com/arantonitis/xylem'
 
 
-def _src_Module(node):
-    return '\n'.join(to_source(child) for child in node.body)
+def _src_Module(node): return '\n'.join(to_source(child) for child in node.body)
 
 
-def _src_Num(node):
-    return repr(node.n)
+def _src_Num(node): return repr(node.n)
 
 
-def _src_Str(node):
-    return repr(node.s)
+def _src_Str(node): return repr(node.s)
 
 
-def _src_Bytes(node):
-    return repr(node.s)
+def _src_Bytes(node): return repr(node.s)
 
 
 def _src_JoinedStr(node, raw=False):
     f_string = ''.join(_src_FormattedValue(value, raw=True) if isinstance(value, ast.FormattedValue) else value.s
                        for value in node.values)
-    if raw:
-        return f_string
-    else:
-        return 'f' + repr(f_string)
+    return f_string if raw else 'f' + repr(f_string)
 
 
 def _src_FormattedValue(node, raw=False):
     value = to_source(node.value)
-    l = [value]
+    l = ['{', value]
     if node.format_spec is not None:
         l.append(':')
         l.append(_src_JoinedStr(node.format_spec, raw=True))
     if node.conversion != -1:
         l.append('!' + chr(node.conversion))
-    if raw:
-        return '{' + ''.join(l) + '}'
-    else:
-        return 'f' + repr('{' + ''.join(l) + '}')
+    l.append('}')
+    return ''.join(l) if raw else 'f' + repr(''.join(l))
 
 
-def _src_List(node):
-    return '[' + ', '.join(to_source(e) for e in node.elts) + ']'
+def _src_List(node): return '[' + ', '.join(to_source(e) for e in node.elts) + ']'
 
 
-def _src_Tuple(node):
-    return '(' + ', '.join(to_source(e) for e in node.elts) + ')'
+def _src_Tuple(node): return '(' + ', '.join(to_source(e) for e in node.elts) + ')'
 
 
-def _src_Set(node):
-    return '{' + ', '.join(to_source(e) for e in node.elts) + '}'
+def _src_Set(node): return '{' + ', '.join(to_source(e) for e in node.elts) + '}'
 
 
 def _src_Dict(node):
@@ -90,20 +78,16 @@ def _src_Dict(node):
                            for key, value in zip(map(to_source, node.keys), map(to_source, node.values))) + '}'
 
 
-def _src_Ellipsis(node):
-    return '...'
+def _src_Ellipsis(node): return '...'
 
 
-def _src_NameConstant(const):
-    return repr(const.value)
+def _src_NameConstant(const): return repr(const.value)
 
 
-def _src_Name(name):
-    return name.id
+def _src_Name(name): return name.id
 
 
-def _src_Starred(node):
-    return '*' + to_source(node.value)
+def _src_Starred(node): return '*' + to_source(node.value)
 
 
 # Mapping from AST operators to their priority/precedence. Higher numbers represent higher precedence.
@@ -118,73 +102,34 @@ operator_map = {ast.UAdd: '+', ast.USub: '-', ast.Not: 'not ', ast.Invert: '~', 
                 ast.RShift: '>>', ast.BitOr: '|', ast.BitXor: '^', ast.BitAnd: '&', ast.MatMult: '@', ast.And: ' and ',
                 ast.Or: ' or ', ast.Eq: '==', ast.NotEq: '!=', ast.Lt: '<', ast.LtE: '<=', ast.Gt: '>', ast.GtE: '>=',
                 ast.Is: ' is ', ast.IsNot: ' is not ', ast.In: ' in ', ast.NotIn: ' not in '}
+left_associative = {ast.Sub, ast.Div, ast.FloorDiv, ast.Mod, ast.LShift, ast.RShift}  # All left-associative operators
 
 
-def _src_Expr(node):
-    return to_source(node.value)
+def _src_Expr(node): return to_source(node.value)
 
 
-def _src_UnaryOp(node, parent_op=None, descend=0):
-    op = node.op.__class__
-    operand = to_source(node.operand, op)
-    if parent_op is None:
-        parens = False
-    elif op is not ast.Not and parent_op == ast.Pow and descend == 1:  # Parens not needed on the right side of 2**-1
-        parens = False
-    elif priority[parent_op] > priority[op]:
-        parens = True
-    else:
-        parens = False
-    s = operator_map[op] + operand
-    return '(' + s + ')' if parens else s
+def _src_Op(node, parent_op=None, descend=0):
+    op = node.__class__ if isinstance(node, ast.Compare) else node.op.__class__
+    # Parentheses are only needed when the parent priority is greater (>= for left-associative operators).
+    # They are also needed for Compare operators whose parent is also a Compare.
+    # They are NOT needed if the operator is a unary minus/add/invert whose parent is a power (i.e 2**-1).
+    parens = not (op in (ast.UAdd, ast.USub, ast.Invert) and parent_op == ast.Pow and descend == 1) \
+        and (priority[parent_op] > priority[op] or op == ast.Compare == parent_op
+             or op in left_associative and parent_op in left_associative and priority[parent_op] >= priority[op]
+             and descend == 1)
+    if isinstance(node, ast.UnaryOp):
+        src = operator_map[op] + to_source(node.operand, op)
+    elif isinstance(node, ast.BinOp):
+        src = to_source(node.left, op, -1) + operator_map[op] + to_source(node.right, op, 1)
+    elif isinstance(node, ast.BoolOp):
+        src = operator_map[op].join(to_source(value, op) for value in node.values)
+    else:  # Compare. Join together all the comparison operators with the values being compared
+        src = to_source(node.left, op) + \
+              ''.join(operator_map[cmp.__class__]+value
+                      for cmp, value in zip(node.ops, (to_source(cmp, op) for cmp in node.comparators)))
+    return '(' + src + ')' if parens else src
 
-
-def _src_BinOp(node, parent_op=None, descend=0):
-    op = node.op.__class__
-    left, right = to_source(node.left, op, -1), to_source(node.right, op, 1)
-    if parent_op is None:
-        parens = False
-    elif priority[parent_op] > priority[op]:
-        parens = True
-    elif op == ast.Sub == parent_op and descend == 1:
-        parens = True
-    elif op in [ast.Div, ast.FloorDiv, ast.Mod] and parent_op in [ast.Div, ast.FloorDiv, ast.Mod] and descend == 1:
-        parens = True
-    elif op in [ast.LShift, ast.RShift] and parent_op in [ast.LShift, ast.RShift] and descend == 1:
-        parens = True
-    else:
-        parens = False
-    s = ''.join([left, operator_map[node.op.__class__], right])
-    return '(' + s + ')' if parens else s
-
-
-def _src_BoolOp(node, parent_op=None, descend=0):
-    op = node.op.__class__
-    values = map(lambda s: to_source(s, op), node.values)
-    if parent_op is None:
-        parens = False
-    elif priority[parent_op] > priority[op]:
-        parens = True
-    else:
-        parens = False
-    s = operator_map[op].join(values)
-    return '(' + s + ')' if parens else s
-
-
-def _src_Compare(node, parent_op=None, descend=0):
-    op = node.__class__
-    comparators = map(lambda s: to_source(s, op), node.comparators)
-    left = to_source(node.left, op)
-    if parent_op is None:
-        parens = False
-    elif priority[parent_op] > priority[op]:
-        parens = True
-    elif op == ast.Compare == parent_op:
-        parens = True
-    else:
-        parens = False
-    s = left + ''.join(operator_map[cmp.__class__]+value for cmp, value in zip(node.ops, comparators))
-    return '(' + s + ')' if parens else s
+_src_UnaryOp = _src_BoolOp = _src_BinOp = _src_Compare = _src_Op
 
 
 def _src_Call(node):
@@ -212,107 +157,69 @@ def _src_Call(node):
         return to_source(node.func) + '(' + ', '.join(norm + key + star + double) + ')'
 
 
-def _src_keyword(node):
-    if node.arg is None:
-        return '**' + to_source(node.value)
-    else:
-        return node.arg + '=' + to_source(node.value)
+def _src_keyword(node): return ('**' if node.arg is None else node.arg + '=') + to_source(node.value)
 
 
-def _src_IfExp(node):
-    body, test, orelse = to_source(node.body), to_source(node.test), to_source(node.orelse)
-    return ' '.join([body, 'if', test, 'else', orelse])
+def _src_IfExp(node): return to_source(node.body) + ' if ' + to_source(node.test) + ' else ' + to_source(node.orelse)
 
 
-def _src_Attribute(node):
-    value = to_source(node.value)
-    return value + '.' + node.attr
+def _src_Attribute(node): return to_source(node.value) + '.' + node.attr
 
 
-def _src_Subscript(node):
-    value, slice = to_source(node.value), to_source(node.slice)
-    return value + '[' + slice + ']'
+def _src_Subscript(node): return to_source(node.value) + '[' + to_source(node.slice) + ']'
 
 
-def _src_Index(node):
-    return to_source(node.value)
+def _src_Index(node): return to_source(node.value)
 
 
 def _src_Slice(node):
     lower, upper, step = to_source(node.lower), to_source(node.upper), to_source(node.step)
-    if step is None:
-        if upper is None and lower is None:
-            return ':'
-        elif upper is None:
-            return lower + ':'
-        elif lower is None:
-            return ':' + upper
-        else:
-            return lower + ':' + upper
-    else:
-        if upper is None and lower is None:
-            return '::' + step
-        elif upper is None:
-            return lower + '::' + step
-        elif lower is None:
-            return ':' + upper + ':' + step
-        else:
-            return lower + ':' + upper + ':' + step
+    lower, upper = lower if lower else '', upper if upper else ''
+    return lower + ':' + upper + (':' + step if step else '')
 
 
-def _src_ExtSlice(node):
-    dims = map(to_source, node.dims)
-    return ', '.join(dims)
+def _src_ExtSlice(node): return ', '.join(to_source(dim) for dim in node.dims)
 
 
 def _src_ListComp(node):
-    elt, generators = to_source(node.elt), map(to_source, node.generators)
-    return '[' + ' '.join([elt] + list(generators)) + ']'
+    return '[' + to_source(node.elt) + ' ' + ' '.join(to_source(gen) for gen in node.generators) + ']'
 
 
 def _src_SetComp(node):
-    elt, generators = to_source(node.elt), map(to_source, node.generators)
-    return '{' + ' '.join([elt] + list(generators)) + '}'
+    return '{' + to_source(node.elt) + ' ' + ' '.join(to_source(gen) for gen in node.generators) + '}'
 
 
 def _src_GeneratorExp(node):
-    elt, generators = to_source(node.elt), map(to_source, node.generators)
-    return '(' + ' '.join([elt] + list(generators)) + ')'
+    return '(' + to_source(node.elt) + ' ' + ' '.join(to_source(gen) for gen in node.generators) + ')'
 
 
 def _src_DictComp(node):
-    key, value, generators = to_source(node.key), to_source(node.value), map(to_source, node.generators)
-    return '{' + ' '.join([key + ':' + value] + list(generators)) + '}'
+    key, value = to_source(node.key), to_source(node.value)
+    return '{' + key + ':' + value + ' ' + ' '.join(to_source(gen) for gen in node.generators) + '}'
 
 
 def _src_comprehension(node):
     target, iter, ifs = to_source(node.target), to_source(node.iter), list(map(to_source, node.ifs))
-    l = []
-    if node.is_async:
-        l.append('async')
+    l = ['async'] if node.is_async else []
     l.extend(['for', target, 'in', iter])
     if ifs:
         l.append(' '.join(map(lambda s: 'if ' + s, ifs)))
     return ' '.join(l)
 
 
-def _src_Assign(node):
-    targets, value = map(to_source, node.targets), to_source(node.value)
-    return ' = '.join(targets) + ' = ' + value
+def _src_Assign(node): return ' = '.join(to_source(target) for target in node.targets) + ' = ' + to_source(node.value)
 
 
 def _src_AnnAssign(node):
     target, annotation, value = to_source(node.target), to_source(node.annotation), to_source(node.value)
-    l = [target + ':'] if node.simple == 1 else ['(' + target + '):']
-    l.append(annotation)
+    l = [target + ':' if node.simple == 1 else '(' + target + '):', annotation]
     if value is not None:
         l.extend(['=', value])
     return ' '.join(l)
 
 
 def _src_AugAssign(node):
-    target, value = to_source(node.target), to_source(node.value)
-    return ' '.join([target, operator_map[node.op.__class__]+'=', value])
+    return ' '.join([to_source(node.target), operator_map[node.op.__class__]+'=', to_source(node.value)])
 
 
 def _src_Print(node):  # TODO Python 2 only
@@ -321,38 +228,26 @@ def _src_Print(node):  # TODO Python 2 only
 
 def _src_Raise(node):
     exc, cause = to_source(node.exc), to_source(node.cause)
-    if exc is None:
-        return 'raise'
-    elif cause is not None:
-        return ' '.join(['raise', exc, 'from', cause])
-    else:
-        return ' '.join(['raise', exc])
+    return 'raise' + (' ' + exc if exc else '') + (' from ' + cause if cause else '')
 
 
 def _src_Assert(node):
     test, msg = to_source(node.test), to_source(node.msg)
-    if msg is not None:
-        return ' '.join(['assert', test+', ', msg])
-    else:
-        return ' '.join(['assert', test])
+    return 'assert ' + test + (', ' + msg if msg else '')
 
 
-def _src_Delete(node):
-    return 'del ' + ', '.join(to_source(target) for target in node.targets)
+def _src_Delete(node): return 'del ' + ', '.join(to_source(target) for target in node.targets)
 
 
-def _src_Pass(node):
-    return 'pass'
+def _src_Pass(node): return 'pass'
 
 
-def _src_Import(node):
-    return 'import ' + ', '.join(to_source(name) for name in node.names)
+def _src_Import(node): return 'import ' + ', '.join(to_source(name) for name in node.names)
 
 
 def _src_ImportFrom(node):
-    module, names, level = node.module, map(to_source, node.names), node.level
-    module = '.'*level + (module if module else '')
-    return 'from ' + module + ' import ' + ', '.join(names)
+    module = '.'*node.level + (node.module if node.module else '')
+    return 'from ' + module + ' import ' + ', '.join(to_source(name) for name in node.names)
 
 
 def _src_alias(node):
@@ -367,59 +262,49 @@ def _src_If(node):
             orelse = node.orelse[0]
             else_lines = to_source(orelse).split('\n')
             else_lines[0] = 'el' + else_lines[0]
-            orelse = else_lines
-            return '\n'.join([test] + body + orelse)
+            return '\n'.join([test] + body + else_lines)
         else:
             else_lines = []
             for else_node in node.orelse:
                 else_lines.extend(to_source(else_node).split('\n'))
-            orelse = list(map(lambda x: ' '*4 + x, else_lines))
+            orelse = list(indent(else_lines))
             return '\n'.join([test] + body + ['else:'] + orelse)
     else:
         return '\n'.join([test] + body)
 
 
 def _src_For(node):
-    target, iter = to_source(node.target), to_source(node.iter)
     body = list(indent(line_export(node.body)))
-    s = 'for ' + target + ' in ' + iter + ':'
+    s = 'for ' + to_source(node.target) + ' in ' + to_source(node.iter) + ':'
     if node.orelse:
-        orelse = list(indent(line_export(node.orelse)))
-        return '\n'.join([s] + body + ['else:'] + orelse)
+        return '\n'.join([s] + body + ['else:'] + list(indent(line_export(node.orelse))))
     else:
         return '\n'.join([s] + body)
 
 
 def _src_While(node):
-    test = to_source(node.test)
     body = list(indent(line_export(node.body)))
-    s = 'while ' + test + ':'
+    s = 'while ' + to_source(node.test) + ':'
     if node.orelse:
-        orelse = list(indent(line_export(node.orelse)))
-        return '\n'.join([s] + body + ['else:'] + orelse)
+        return '\n'.join([s] + body + ['else:'] + list(indent(line_export(node.orelse))))
     else:
         return '\n'.join([s] + body)
 
 
-def _src_Break(node):
-    return 'break'
+def _src_Break(node): return 'break'
 
 
-def _src_Continue(node):
-    return 'continue'
+def _src_Continue(node): return 'continue'
 
 
-def line_export(nodes):
-    return (line for node in nodes for line in to_source(node).split('\n'))
+def line_export(nodes, indent=False): return (line for node in nodes for line in to_source(node).split('\n'))
 
 
-def indent(lines):
-    return (' '*4 + line for line in lines)
+def indent(lines): return (' '*4 + line for line in lines)
 
 
 def _src_Try(node):
-    l = ['try:']
-    l.extend(indent(line_export(node.body)))
+    l = ['try:'] + list(indent(line_export(node.body)))
     if node.handlers:
         l.extend(line_export(node.handlers))
     if node.orelse:
@@ -432,47 +317,36 @@ def _src_Try(node):
 
 
 def _src_ExceptHandler(node):
-    type, name = to_source(node.type), node.name
-    if type is None:
+    type = to_source(node.type)
+    if to_source(node.type) is None:
         header = 'except:'
-    elif name is None:
+    elif node.name is None:
         header = 'except ' + type + ':'
     else:
-        header = 'except ' + type + ' as ' + name + ':'
-    body = list(indent(line_export(node.body)))
-    return '\n'.join([header] + body)
+        header = 'except ' + type + ' as ' + node.name + ':'
+    return '\n'.join([header] + list(indent(line_export(node.body))))
 
 
 def _src_With(node):
-    l = ['with ' + ', '.join(to_source(item) for item in node.items) + ':']
-    l.extend(indent(line_export(node.body)))
+    l = ['with ' + ', '.join(to_source(item) for item in node.items) + ':'] + list(indent(line_export(node.body)))
     return '\n'.join(l)
 
 
 def _src_withitem(node):
     context_expr, optional_vars = to_source(node.context_expr), to_source(node.optional_vars)
-    if optional_vars is None:
-        return context_expr
-    else:
-        return context_expr + ' as ' + optional_vars
+    return context_expr if optional_vars is None else context_expr + ' as ' + optional_vars
 
 
-def _src_FunctionDef(funcdef):  # TODO: Lots of compatibility before Python 3, 3.3
-    l = []
-    if funcdef.decorator_list:
-        l.extend('@' + to_source(decorator) for decorator in funcdef.decorator_list)
-    return_annotation = ' -> ' + to_source(funcdef.returns) if funcdef.returns else ''
-    l.append('def ' + funcdef.name + '(' + to_source(funcdef.args) + ')' + return_annotation + ':')
-    l.extend(indent(line_export(funcdef.body)))
-    return '\n'.join(l)
+def _src_FunctionDef(node):  # TODO: Lots of compatibility before Python 3, 3.3
+    l = ['@' + to_source(decorator) for decorator in node.decorator_list]
+    return_annotation = ' -> ' + to_source(node.returns) if node.returns else ''
+    l.append('def ' + node.name + '(' + to_source(node.args) + ')' + return_annotation + ':')
+    return '\n'.join(l + list(indent(line_export(node.body))))
 
 
 def _src_Lambda(node):
     args, body = to_source(node.args), to_source(node.body)
-    if args:
-        return 'lambda ' + args + ': ' + body
-    else:
-        return 'lambda: ' + body
+    return ('lambda ' + args if args else 'lambda') + ': ' + body
 
 
 def _src_arguments(arguments):
@@ -491,76 +365,52 @@ def _src_arguments(arguments):
     return ', '.join(l)
 
 
-def _src_arg(arg):
-    if arg.annotation:
-        return ''.join([arg.arg, ': ', to_source(arg.annotation), ''])
-    else:
-        return arg.arg
+def _src_arg(arg): return arg.arg + ': ' + to_source(arg.annotation) if arg.annotation else arg.arg
 
 
-def _src_Return(node):
-    return 'return ' + to_source(node.value) if node.value else 'return'
+def _src_Return(node): return 'return ' + to_source(node.value) if node.value else 'return'
 
 
-def _src_Yield(node):
-    return 'yield ' + to_source(node.value)
+def _src_Yield(node): return 'yield ' + to_source(node.value)
 
 
-def _src_YieldFrom(node):
-    return 'yield from ' + to_source(node.value)
+def _src_YieldFrom(node): return 'yield from ' + to_source(node.value)
 
 
-def _src_Global(node):
-    return 'global ' + ', '.join(node.names)
+def _src_Global(node): return 'global ' + ', '.join(node.names)
 
 
-def _src_Nonlocal(node):
-    return 'nonlocal ' + ', '.join(node.names)
+def _src_Nonlocal(node): return 'nonlocal ' + ', '.join(node.names)
 
 
 def _src_ClassDef(node):
-    l = []
-    if node.decorator_list:
-        l.extend('@' + to_source(decorator) for decorator in node.decorator_list)
-    args = []
-    if node.bases:
-        args.extend(to_source(base) for base in node.bases)
-    if node.keywords:
-        args.extend(to_source(keyword) for keyword in node.keywords)
-    if node.bases or node.keywords:
-        l.append('class ' + node.name + '(' + ', '.join(args) + '):')
-    else:
-        l.append('class ' + node.name + ':')
-    l.extend(indent(line_export(node.body)))
-    return '\n'.join(l)
+    l = ['@' + to_source(decorator) for decorator in node.decorator_list]
+    args = [to_source(base) for base in node.bases] + [to_source(keyword) for keyword in node.keywords]
+    l.append('class ' + node.name + ('(' + ', '.join(args) + '):' if args else ':'))
+    return '\n'.join(l + list(indent(line_export(node.body))))
 
 
-def _src_AsyncFunctionDef(node):
-    return 'async ' + _src_FunctionDef(node)
+def _src_AsyncFunctionDef(node): return 'async ' + _src_FunctionDef(node)
 
 
-def _src_Await(node):
-    return 'await ' + to_source(node.value)
+def _src_Await(node): return 'await ' + to_source(node.value)
 
 
-def _src_AsyncFor(node):
-    return 'async ' + _src_For(node)
+def _src_AsyncFor(node): return 'async ' + _src_For(node)
 
 
-def _src_AsyncWith(node):
-    return 'async ' + _src_With(node)
+def _src_AsyncWith(node): return 'async ' + _src_With(node)
 
 
-def _src_Expression(node):
-    return to_source(node.body)
+def _src_Expression(node): return to_source(node.body)
 
-# Maps AST classes to the functions used to turn them into source
+# Maps AST classes to the functions used to turn them into source code
 mapping = {getattr(ast, name[5:]): obj for name, obj in globals().copy().items()
            if name.startswith('_src_') and callable(obj) and hasattr(ast, name[5:])}
 
 
 max_depth = 0
-def depth_counter(f):
+def depth_counter(f):  # Depth counter for keeping track of recursion depth
     depth = 0
     def wrapper(*args, **kwargs):
         global max_depth

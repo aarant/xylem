@@ -11,7 +11,7 @@ Convert Python Abstract Syntax Trees (ASTs) to readable source code.
 
 Xylem is useful for when you want to make dynamic changes to Python code/ASTs, but also need to write those changes back as source code.
 
-It's also very small (~600 lines), and pure-Python, and produces (mostly) readable source code.
+It's also very small (<500 lines), pure-Python, and produces (mostly) readable source code.
 
 In writing this, I made heavy use of the unofficial AST documentation at `Green Tree Snakes`_.
 
